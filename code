@@ -1,0 +1,268 @@
+
+const { test, expect } = require('@playwright/test');
+
+const BASE_URL = 'http://localhost:5173';
+
+const testUser = {
+  name: 'Test User',
+  email: 'testuser@example.com',
+  phone: '9876543210',
+  password: 'Test@12345',
+  role: 'Job Seeker'
+};
+
+// Reusable function to prepare a test account
+async function prepareUser(page) {
+  await page.addInitScript((user) => {
+    localStorage.setItem('jobPortalUser', JSON.stringify(user));
+    localStorage.setItem('isLoggedIn', 'true');
+  }, testUser);
+}
+
+// Reusable login function
+async function login(page, email, password) {
+  await page.goto(`${BASE_URL}/login`);
+
+  await page.getByPlaceholder('Enter your email').fill(email);
+  await page.getByPlaceholder('Enter your password').fill(password);
+
+  await page.getByRole('button', { name: 'Login' }).click();
+}
+
+// TC01: Verify homepage
+test('TC01 - Verify Job Portal Homepage', async ({ page }) => {
+  await page.goto(BASE_URL);
+
+  await expect(
+    page.getByRole('heading', { name: /find a job you/i })
+  ).toBeVisible();
+
+  await expect(
+    page.getByRole('link', { name: /explore jobs/i })
+  ).toBeVisible();
+});
+
+// TC02: Verify successful login
+test('TC02 - Login with Valid Credentials', async ({ page }) => {
+  await prepareUser(page);
+
+  page.on('dialog', dialog => dialog.accept());
+
+  await login(page, testUser.email, testUser.password);
+
+  await expect(page).toHaveURL(/\/dashboard$/);
+
+  await expect(
+    page.getByRole('heading', { name: /welcome back, test user/i })
+  ).toBeVisible();
+
+  expect(await page.evaluate(
+    () => localStorage.getItem('isLoggedIn')
+  )).toBe('true');
+});
+
+// TC03: Verify invalid login
+test('TC03 - Reject Invalid Login Credentials', async ({ page }) => {
+  await prepareUser(page);
+
+  await login(page, testUser.email, 'WrongPassword123');
+
+  await expect(page.getByText(
+    'Invalid email or password.'
+  )).toBeVisible();
+
+  await expect(page).toHaveURL(/\/login$/);
+});
+
+// TC04: Verify registration and password mismatch
+test('TC04 - Validate Registration Password Mismatch', async ({ page }) => {
+  await page.goto(`${BASE_URL}/register`);
+
+  await page.getByPlaceholder('Enter your full name')
+    .fill('New Test User');
+
+  await page.getByPlaceholder('Enter your email')
+    .fill('newuser@example.com');
+
+  await page.getByPlaceholder('Enter your phone number')
+    .fill('9876543210');
+
+  await page.getByPlaceholder('Create a password')
+    .fill('Test@12345');
+
+  await page.getByPlaceholder('Confirm your password')
+    .fill('Different@123');
+
+  page.once('dialog', async dialog => {
+    expect(dialog.message()).toBe('Passwords do not match!');
+    await dialog.accept();
+  });
+
+  await page.getByRole('button', {
+    name: 'Create Account'
+  }).click();
+
+  await expect(page).toHaveURL(/\/register$/);
+
+  expect(await page.evaluate(
+    () => localStorage.getItem('jobPortalUser')
+  )).toBeNull();
+});
+
+// TC05: Verify successful registration
+test('TC05 - Register a New User', async ({ page }) => {
+  await page.goto(`${BASE_URL}/register`);
+
+  await page.getByPlaceholder('Enter your full name')
+    .fill('New Test User');
+
+  await page.getByPlaceholder('Enter your email')
+    .fill('newuser@example.com');
+
+  await page.getByPlaceholder('Enter your phone number')
+    .fill('9876543210');
+
+  await page.getByPlaceholder('Create a password')
+    .fill('Test@12345');
+
+  await page.getByPlaceholder('Confirm your password')
+    .fill('Test@12345');
+
+  page.once('dialog', dialog => dialog.accept());
+
+  await page.getByRole('button', {
+    name: 'Create Account'
+  }).click();
+
+  await expect(page).toHaveURL(/\/login$/);
+
+  const savedUser = await page.evaluate(
+    () => JSON.parse(localStorage.getItem('jobPortalUser'))
+  );
+
+  expect(savedUser.email).toBe('newuser@example.com');
+  expect(savedUser.name).toBe('New Test User');
+});
+
+// TC06: Verify job search
+test('TC06 - Search Jobs by Location', async ({ page }) => {
+  await page.goto(`${BASE_URL}/jobs`);
+
+  await page.getByPlaceholder(
+    'Search by job title, company or location...'
+  ).fill('Mohali');
+
+  await expect(page.locator('.job-card')).toHaveCount(1);
+
+  await expect(
+    page.getByRole('heading', { name: 'Python Developer' })
+  ).toBeVisible();
+
+  await expect(page.getByText('Available Jobs (1)'))
+    .toBeVisible();
+});
+
+// TC07: Verify empty search
+test('TC07 - Display All Jobs for Empty Search', async ({ page }) => {
+  await page.goto(`${BASE_URL}/jobs`);
+
+  const searchBox = page.getByPlaceholder(
+    'Search by job title, company or location...'
+  );
+
+  await searchBox.fill('Frontend Developer');
+
+  await expect(page.locator('.job-card')).toHaveCount(1);
+
+  await searchBox.fill('');
+
+  await expect(page.locator('.job-card')).toHaveCount(6);
+
+  await expect(page.getByText('Available Jobs (6)'))
+    .toBeVisible();
+});
+
+// TC08: Verify job application submission
+test('TC08 - Submit a Job Application', async ({ page }) => {
+  await page.goto(`${BASE_URL}/job-details`);
+
+  await page.getByPlaceholder('Enter your name')
+    .fill('Test Applicant');
+
+  await page.getByPlaceholder('Enter your email')
+    .fill('applicant@example.com');
+
+  await page.getByPlaceholder('Enter your phone number')
+    .fill('9876543210');
+
+  await page.locator('input[type="file"]').setInputFiles({
+    name: 'resume.pdf',
+    mimeType: 'application/pdf',
+    buffer: Buffer.from('%PDF-1.4 test resume')
+  });
+
+  await page.getByRole('button', {
+    name: 'Submit Application'
+  }).click();
+
+  await expect(page.getByText(
+    'Application Submitted Successfully!'
+  )).toBeVisible();
+});
+
+// TC09: Verify profile editing
+test('TC09 - Update User Profile', async ({ page }) => {
+  await prepareUser(page);
+
+  page.on('dialog', dialog => dialog.accept());
+
+  await page.goto(`${BASE_URL}/edit-profile`);
+
+  await page.locator('input[name="name"]').fill('Updated Test User');
+
+  await page.getByRole('button', {
+    name: 'Save Changes'
+  }).click();
+
+  await expect(page).toHaveURL(/\/dashboard$/);
+
+  const savedUser = await page.evaluate(
+    () => JSON.parse(localStorage.getItem('jobPortalUser'))
+  );
+
+  expect(savedUser.name).toBe('Updated Test User');
+});
+
+test('TC10 - Logout and Check Dashboard Access', async ({ page }) => {
+  // Open website first
+  await page.goto(BASE_URL);
+
+  // Set login data only once
+  await page.evaluate((user) => {
+    localStorage.setItem('jobPortalUser', JSON.stringify(user));
+    localStorage.setItem('isLoggedIn', 'true');
+  }, testUser);
+
+  // Open dashboard
+  await page.goto(`${BASE_URL}/dashboard`);
+
+  await expect(
+    page.getByRole('heading', { name: /welcome back/i })
+  ).toBeVisible();
+
+  // Logout
+  await page.getByRole('button', { name: 'Logout' }).click();
+
+  await expect(page).toHaveURL(/\/login$/);
+
+  // Confirm login status is removed
+  expect(
+    await page.evaluate(() => localStorage.getItem('isLoggedIn'))
+  ).toBeNull();
+
+  // Try opening dashboard after logout
+  await page.goto(`${BASE_URL}/dashboard`);
+
+  // User should be redirected to login
+  await expect(page).toHaveURL(/\/login$/, { timeout: 10000 });
+});
